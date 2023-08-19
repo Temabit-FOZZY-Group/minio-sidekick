@@ -191,7 +191,7 @@ type BackendStats struct {
 	LastDowntime    time.Duration
 	CumDowntime     time.Duration
 	TotCalls        int64
-	TotCallFailures int64
+	TotCallFailures [errorHTTPStatusCodes]int64
 	MinLatency      time.Duration
 	MaxLatency      time.Duration
 	CumLatency      time.Duration
@@ -244,6 +244,15 @@ func (b *Backend) ErrorHandler(w http.ResponseWriter, r *http.Request, err error
 	}
 
 	writeErrorResponse(w, r, err)
+}
+
+// GetTotCallFailures returns total call failures, count of failures with status codes 4xx and 5xx
+func (b *BackendStats) GetTotCallFailures() int64 {
+	totCallFailures := int64(0)
+	for _, value := range b.TotCallFailures {
+		totCallFailures += value
+	}
+	return totCallFailures
 }
 
 // registerMetricsRouter - add handler functions for metrics.
@@ -384,7 +393,7 @@ func (b *Backend) updateCallStats(t shortTraceMsg) {
 	defer b.Stats.Unlock()
 	b.Stats.TotCalls++
 	if t.StatusCode >= http.StatusBadRequest {
-		b.Stats.TotCallFailures++
+		b.Stats.TotCallFailures[t.StatusCode-http.StatusBadRequest]++
 	}
 	b.Stats.MaxLatency = time.Duration(int64(math.Max(float64(b.Stats.MaxLatency), float64(t.CallStats.Latency))))
 	b.Stats.MinLatency = time.Duration(int64(math.Min(float64(b.Stats.MinLatency), float64(t.CallStats.Latency))))
@@ -397,6 +406,7 @@ func (b *Backend) updateCallStats(t shortTraceMsg) {
 		if c.endpoint != b.endpoint {
 			continue
 		}
+		c.setAvgLatency(t.CallStats.Latency)
 		c.setMinLatency(b.Stats.MinLatency)
 		c.setMaxLatency(b.Stats.MaxLatency)
 		c.setInputBytes(b.Stats.Rx)

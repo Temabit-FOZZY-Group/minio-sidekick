@@ -17,12 +17,15 @@ package main
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/atomic"
 )
+
+const errorHTTPStatusCodes = http.StatusNetworkAuthenticationRequired - http.StatusBadRequest + 1
 
 func init() {
 	prometheus.MustRegister(newSidekickCollector())
@@ -55,6 +58,8 @@ func (c *sidekickCollector) Collect(ch chan<- prometheus.Metric) {
 			continue
 		}
 
+		ch <- c.avgLatency
+
 		// total calls per node
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
@@ -65,15 +70,20 @@ func (c *sidekickCollector) Collect(ch chan<- prometheus.Metric) {
 			float64(c.totalCalls.Load()),
 			c.endpoint,
 		)
-		ch <- prometheus.MustNewConstMetric(
-			prometheus.NewDesc(
-				prometheus.BuildFQName("sidekick", "errors", "total"),
-				"Total number of failed calls in current SideKick server instance",
-				[]string{"endpoint"}, nil),
-			prometheus.CounterValue,
-			float64(c.totalFailedCalls.Load()),
-			c.endpoint,
-		)
+		for statusCode, counter := range c.totalFailedCalls {
+			if value := counter.Load(); value > 0 {
+				ch <- prometheus.MustNewConstMetric(
+					prometheus.NewDesc(
+						prometheus.BuildFQName("sidekick", "errors", "total"),
+						"Total number of failed calls in current SideKick server instance",
+						[]string{"endpoint", "status_code"}, nil),
+					prometheus.CounterValue,
+					float64(value),
+					c.endpoint,
+					strconv.Itoa(statusCode+http.StatusBadRequest),
+				)
+			}
+		}
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
 				prometheus.BuildFQName("sidekick", "rx", "bytes_total"),
@@ -123,7 +133,8 @@ type ConnStats struct {
 	totalInputBytes  atomic.Uint64
 	totalOutputBytes atomic.Uint64
 	totalCalls       atomic.Uint64
-	totalFailedCalls atomic.Uint64
+	totalFailedCalls [errorHTTPStatusCodes]atomic.Uint64
+	avgLatency       prometheus.Summary
 	minLatency       atomic.Duration
 	maxLatency       atomic.Duration
 }
@@ -149,8 +160,15 @@ func (s *ConnStats) setTotalCalls(n int64) {
 }
 
 // Store current total call failures
-func (s *ConnStats) setTotalCallFailures(n int64) {
-	s.totalFailedCalls.Store(uint64(n))
+func (s *ConnStats) setTotalCallFailures(n [errorHTTPStatusCodes]int64) {
+	for statusCode, value := range n {
+		s.totalFailedCalls[statusCode].Store(uint64(value))
+	}
+}
+
+// set avg latency
+func (s *ConnStats) setAvgLatency(mn time.Duration) {
+	s.avgLatency.Observe(float64(mn))
 }
 
 // set min latency
@@ -170,5 +188,15 @@ func (s *ConnStats) getTotalOutputBytes() uint64 {
 
 // Prepare new ConnStats structure
 func newConnStats(endpoint string) *ConnStats {
-	return &ConnStats{endpoint: endpoint}
+	return &ConnStats{
+		endpoint: endpoint,
+		avgLatency: prometheus.NewSummary(prometheus.SummaryOpts{
+			Namespace: "sidekick",
+			Subsystem: "requests",
+			Name:      "latency",
+			ConstLabels: prometheus.Labels{
+				"endpoint": endpoint,
+			},
+		}),
+	}
 }

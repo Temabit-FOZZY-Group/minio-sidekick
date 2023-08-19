@@ -226,7 +226,7 @@ func (n *nodesView) populate(m *multisite) int {
 			case 3:
 				text = strconv.FormatInt(b.Stats.TotCalls, 10)
 			case 4:
-				text = strconv.FormatInt(b.Stats.TotCallFailures, 10)
+				text = strconv.FormatInt(b.Stats.GetTotCallFailures(), 10)
 			case 5:
 				text = humanize.IBytes(uint64(b.Stats.Rx))
 			case 6:
