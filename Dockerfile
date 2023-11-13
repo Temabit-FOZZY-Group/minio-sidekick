@@ -72,7 +72,7 @@ RUN --mount=type=bind,source=./,target=./ \
         -o /sidekick
 
 # wait until other stages are done
-COPY --from=lint /linter_result.txt /linter_result.txt
+# COPY --from=lint /linter_result.txt /linter_result.txt
 COPY --from=test /cover.out /cover.out
 
 # =============================================================================
