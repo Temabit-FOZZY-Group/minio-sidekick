@@ -1,12 +1,13 @@
 package main
 
 import (
+	"math/rand"
 	"testing"
 	"time"
 )
 
-func Test_newConnStats(_ *testing.T) {
-	newConnStats("test").setAvgLatency(5 * time.Second)
-	newConnStats("test").setAvgLatency(5 * time.Second)
-	newConnStats("test").setAvgLatency(5 * time.Second)
+func TestConnStats_setAvgLatency(t *testing.T) {
+	newConnStats("test").setAvgLatency(time.Duration(rand.Int63()), "GET", "")
+	newConnStats("test").setAvgLatency(time.Duration(rand.Int63()), "GET", "/")
+	newConnStats("test").setAvgLatency(time.Duration(rand.Int63()), "GET", "/core-data/Cheques/dbo__cheques")
 }

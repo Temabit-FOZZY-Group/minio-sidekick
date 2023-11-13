@@ -406,7 +406,7 @@ func (b *Backend) updateCallStats(t shortTraceMsg) {
 		if c.endpoint != b.endpoint {
 			continue
 		}
-		c.setAvgLatency(t.CallStats.Latency)
+		c.setAvgLatency(t.CallStats.Latency, t.Method, t.Path)
 		c.setMinLatency(b.Stats.MinLatency)
 		c.setMaxLatency(b.Stats.MaxLatency)
 		c.setInputBytes(b.Stats.Rx)

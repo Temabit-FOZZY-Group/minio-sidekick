@@ -18,6 +18,7 @@ package main
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -27,8 +28,29 @@ import (
 
 const errorHTTPStatusCodes = http.StatusNetworkAuthenticationRequired - http.StatusBadRequest + 1
 
+var (
+	latencyMetric *prometheus.SummaryVec
+)
+
 func init() {
 	prometheus.MustRegister(newSidekickCollector())
+
+	latencyMetric = prometheus.NewSummaryVec(prometheus.SummaryOpts{
+		Namespace: "sidekick",
+		Subsystem: "requests",
+		Name:      "latency",
+		Help:      "HTTP Requests latency in current SideKick server instance",
+		Objectives: map[float64]float64{
+			0.5:  0.05,
+			0.9:  0.01,
+			0.99: 0.001,
+		},
+	}, []string{
+		"endpoint",
+		"method",
+		"bucket",
+	})
+	prometheus.MustRegister(latencyMetric)
 }
 
 // newSidekickCollector describes the collector
@@ -57,8 +79,6 @@ func (c *sidekickCollector) Collect(ch chan<- prometheus.Metric) {
 		if c == nil {
 			continue
 		}
-
-		ch <- c.avgLatency
 
 		// total calls per node
 		ch <- prometheus.MustNewConstMetric(
@@ -134,7 +154,6 @@ type ConnStats struct {
 	totalOutputBytes atomic.Uint64
 	totalCalls       atomic.Uint64
 	totalFailedCalls [errorHTTPStatusCodes]atomic.Uint64
-	avgLatency       prometheus.Summary
 	minLatency       atomic.Duration
 	maxLatency       atomic.Duration
 }
@@ -166,9 +185,32 @@ func (s *ConnStats) setTotalCallFailures(n [errorHTTPStatusCodes]int64) {
 	}
 }
 
-// set avg latency
-func (s *ConnStats) setAvgLatency(mn time.Duration) {
-	s.avgLatency.Observe(float64(mn))
+// setAvgLatency - set avg latency
+func (s *ConnStats) setAvgLatency(mn time.Duration, method, path string) {
+	latencyMetric.WithLabelValues(
+		s.endpoint,
+		method,
+		getBucketFromPath(path),
+	).Observe(float64(mn))
+}
+
+// getBucketFromPath - extract bucket name from http requests path
+func getBucketFromPath(path string) string {
+	if len(path) == 0 {
+		return ""
+	}
+	i := 0
+	for i < len(path) && path[i] == '/' {
+		i++
+	}
+	sb := strings.Builder{}
+	for ; i < len(path); i++ {
+		if path[i] == '/' {
+			break
+		}
+		sb.WriteByte(path[i])
+	}
+	return sb.String()
 }
 
 // set min latency
@@ -188,15 +230,5 @@ func (s *ConnStats) getTotalOutputBytes() uint64 {
 
 // Prepare new ConnStats structure
 func newConnStats(endpoint string) *ConnStats {
-	return &ConnStats{
-		endpoint: endpoint,
-		avgLatency: prometheus.NewSummary(prometheus.SummaryOpts{
-			Namespace: "sidekick",
-			Subsystem: "requests",
-			Name:      "latency",
-			ConstLabels: prometheus.Labels{
-				"endpoint": endpoint,
-			},
-		}),
-	}
+	return &ConnStats{endpoint: endpoint}
 }
