@@ -31,11 +31,13 @@ import (
 	"net/http/pprof"
 	"net/url"
 	"os"
+	"os/signal"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -311,14 +313,18 @@ func getHealthCheckURL(endpoint, healthCheckPath string, healthCheckPort int) (s
 }
 
 // healthCheck - background routine which checks if a backend is up or down.
-func (b *Backend) healthCheck() {
+func (b *Backend) healthCheck(ctx context.Context) {
+	ticker := time.NewTicker(b.healthCheckDuration)
+	defer ticker.Stop()
 	for {
-		err := b.doHealthCheck()
-		if err != nil {
-			console.Fatalln(err)
+		select {
+		case <-ticker.C:
+			if err := b.doHealthCheck(ctx); err != nil {
+				console.Fatalln(err)
+			}
+		case <-ctx.Done():
+			return
 		}
-
-		time.Sleep(b.healthCheckDuration)
 	}
 }
 
@@ -330,9 +336,9 @@ func drainBody(resp *http.Response) {
 	}
 }
 
-func (b *Backend) doHealthCheck() error {
+func (b *Backend) doHealthCheck(ctx context.Context) error {
 	// Set up a maximum timeout time for the healtcheck operation
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.healthCheckURL, nil)
@@ -749,7 +755,7 @@ func IsLoopback(addr string) bool {
 	return net.ParseIP(host).IsLoopback()
 }
 
-func configureSite(ctx *cli.Context, siteNum int, siteStrs []string, healthCheckPath string, healthCheckPort int, healthCheckDuration time.Duration) *site {
+func configureSite(appCtx context.Context, ctx *cli.Context, siteNum int, siteStrs []string, healthCheckPath string, healthCheckPort int, healthCheckDuration time.Duration) *site {
 	var endpoints []string
 
 	if ellipses.HasEllipses(siteStrs...) {
@@ -826,7 +832,7 @@ func configureSite(ctx *cli.Context, siteNum int, siteStrs []string, healthCheck
 		backend := &Backend{siteNum, endpoint, proxy, &http.Client{
 			Transport: proxy.Transport,
 		}, 0, healthCheckURL, healthCheckDuration, &stats}
-		go backend.healthCheck()
+		go backend.healthCheck(appCtx)
 		proxy.ErrorHandler = backend.ErrorHandler
 		backends = append(backends, backend)
 		globalConnStats = append(globalConnStats, newConnStats(endpoint))
@@ -839,6 +845,9 @@ func configureSite(ctx *cli.Context, siteNum int, siteStrs []string, healthCheck
 
 func sidekickMain(ctx *cli.Context) {
 	checkMain(ctx)
+
+	appCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGKILL, syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
 
 	log2.SetFormatter(&logrus.TextFormatter{
 		DisableColors: true,
@@ -873,9 +882,13 @@ func sidekickMain(ctx *cli.Context) {
 	go func() {
 		t := time.NewTicker(ctx.GlobalDuration("dns-ttl"))
 		defer t.Stop()
-
-		for range t.C {
-			dnsCache.Refresh()
+		for {
+			select {
+			case <-t.C:
+				dnsCache.Refresh()
+			case <-appCtx.Done():
+				return
+			}
 		}
 	}()
 
@@ -896,7 +909,7 @@ func sidekickMain(ctx *cli.Context) {
 			healthCheckPath = healthReadCheckPath
 		}
 
-		site := configureSite(ctx, i+1, strings.Split(siteStrs, ","), healthCheckPath, healthCheckPort, healthCheckDuration)
+		site := configureSite(appCtx, ctx, i+1, strings.Split(siteStrs, ","), healthCheckPath, healthCheckPort, healthCheckDuration)
 		sites = append(sites, site)
 	}
 
