@@ -79,6 +79,8 @@ var (
 const (
 	prometheusMetricsPath = "/.prometheus/metrics"
 	profilingPath         = "/.pprof"
+	startupProbePath      = "/.health/startup"
+	livenessProbePath     = "/.health/liveness"
 )
 
 var dnsCache = &dnscache.Resolver{
@@ -932,6 +934,14 @@ func sidekickMain(ctx *cli.Context) {
 	if err := registerMetricsRouter(router); err != nil {
 		console.Fatalln(err)
 	}
+
+	router.Handle(startupProbePath, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	router.Handle(livenessProbePath, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
 
 	router.PathPrefix(slashSeparator).Handler(m)
 	server := &http.Server{
